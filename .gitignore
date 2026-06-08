@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+*.so
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+.DS_Store
+/_external/
+# Claude Code agent state
+.claude/
+# local-only real-world validation corpus (never published)
+tests_materials/

@@ -1,0 +1,29 @@
+[package]
+name = "hypothesis_fast"
+version = "0.0.1"
+edition = "2021"
+description = "Native Rust Conjecture property-test engine for hypothesis_fast"
+license = "MPL-2.0"
+
+[lib]
+name = "_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py311", "num-bigint"] }
+num-bigint = "0.4"
+num-integer = "0.1"
+num-traits = "0.2"
+libm = "0.2"
+rand = "0.8"
+unicode-general-category = "1"
+half = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Line-table debug info (cheap, no runtime cost) + no strip, so a sampling profiler
+# (e.g. samply) can symbolicate Rust frames inside the extension .so.
+debug = "line-tables-only"
+strip = false

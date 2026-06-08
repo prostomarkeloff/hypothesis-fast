@@ -1,0 +1,76 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "hypothesis-fast"
+version = "0.0.1"
+description = "A native-Rust, drop-in-compatible reimplementation of Hypothesis"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MPL-2.0" }
+authors = [{ name = "prostomarkeloff" }]
+keywords = ["property-based-testing", "hypothesis", "conjecture", "pyo3", "rust"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/prostomarkeloff/hypothesis-fast"
+Repository = "https://github.com/prostomarkeloff/hypothesis-fast"
+Issues = "https://github.com/prostomarkeloff/hypothesis-fast/issues"
+
+[project.optional-dependencies]
+fallback = ["hypothesis>=6"]
+dev = [
+    "pytest>=8",
+    "maturin>=1.0,<2.0",
+    "hypothesis>=6",
+    "pytest-fast @ git+https://github.com/prostomarkeloff/pytest-fast.git@v0.7.2",
+    "pytest-timeout>=2.4",
+]
+
+[tool.uv]
+# `make test` runs through `uv run`, which syncs default-groups — include `test`
+# so the parity suite's snapshot fixture (syrupy) is always present.
+default-groups = ["dev", "test"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "hypothesis_fast._engine"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+# tests/hypothesis_compat/**/test_*.py are UNMODIFIED upstream hypothesis test files
+# (run for parity — incl. the extra_numpy/ subpackage), not our code — never lint them.
+# The harness in those dirs (conftest.py, _compat_*.py) IS ours and stays linted.
+extend-exclude = [
+    "tests/hypothesis_compat/test_*.py",
+    "tests/hypothesis_compat/extra_numpy/test_*.py",
+]
+
+[tool.pyright]
+include = ["python"]
+# The compiled extension `hypothesis_fast._engine` has no type stubs; don't
+# flood the report with unknown-attribute noise from the Rust boundary.
+reportMissingModuleSource = false
+reportAttributeAccessIssue = false
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.409",
+    "ruff>=0.15.15",
+]
+test = [
+    "syrupy>=5.3.1",
+]

@@ -1,0 +1,22 @@
+# Changelog
+
+## 0.0.1 — initial public alpha
+
+First public release. A native-Rust reimplementation of [Hypothesis](https://hypothesis.readthedocs.io/),
+a drop-in replacement for its public API with example generation and shrinking moved off the
+Python interpreter and into a compiled engine.
+
+- The whole Conjecture stack in Rust (via PyO3): the typed choice sequence, `ConjectureData` +
+  primitive provider, a strategy node tree drawn entirely in native code, the generate-and-shrink
+  runner, and the database choice-format.
+- Drop-in public API: `@given`, `@settings`, `@example`, `@composite`, `data()`, `find`, `assume`,
+  `target`, `note`, `from_type` / `register_type_strategy`, settings profiles,
+  `@reproduce_failure` / `@seed`, `RuleBasedStateMachine` stateful testing, async test bodies and
+  pytest fixtures.
+- Compatibility validated by running the unmodified upstream Hypothesis test files against this
+  engine: 0 failures.
+- Transparent fallback to the real `hypothesis` package (optional `[fallback]` extra) for tests
+  that pass Hypothesis-internal strategy objects directly to `@given`.
+
+Known gaps (alpha, search-quality not correctness): `target()` is observe-only (no Pareto/optimise
+phase); the shrinker uses fewer passes than upstream. See the README.
