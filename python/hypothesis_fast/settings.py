@@ -85,6 +85,22 @@ class HealthCheck(enum.Enum, metaclass=_HealthCheckMeta):
         return list(cls)
 
 
+# Rebind to the real HealthCheck enum when hypothesis is importable, so members share
+# identity with upstream's (mirrors errors.py rebinding the exception classes). The
+# upstream pytest plugin checks `HealthCheck.function_scoped_fixture in
+# settings.suppress_health_check` by identity; with two distinct enums that check never
+# matches, so it re-flags function-scoped fixtures even when the user suppressed the
+# health check through our `@settings`. Upstream mirrors our member names and integer
+# values, and the engine consumes suppression by `.name` (core.py), so behaviour is
+# unchanged — only cross-package identity is restored.
+try:
+    import hypothesis as _real_hypothesis
+
+    HealthCheck = _real_hypothesis.HealthCheck  # type: ignore[misc,assignment]
+except Exception:  # noqa: BLE001 - hypothesis absent or import side effects
+    pass
+
+
 # return_value / not_a_test_method: always-an-error, so suppressing them is deprecated.
 _DEPRECATED_HEALTH_CHECKS = (HealthCheck.return_value, HealthCheck.not_a_test_method)
 

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "hypothesis-fast"
-version = "0.0.1"
+version = "0.0.2"
 description = "A native-Rust, drop-in-compatible reimplementation of Hypothesis"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -1,6 +1,6 @@
 [package]
 name = "hypothesis_fast"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 description = "Native Rust Conjecture property-test engine for hypothesis_fast"
 license = "MPL-2.0"
