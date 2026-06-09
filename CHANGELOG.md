@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.2
+
+- Fix: `HealthCheck` now shares object identity with the real `hypothesis` enum when that
+  package is importable (mirroring the exception-class rebinding in `errors.py`). The upstream
+  pytest plugin gates its function-scoped-fixture warning on
+  `HealthCheck.function_scoped_fixture in settings.suppress_health_check`, compared by enum
+  identity. With two distinct enums that membership test was always false, so a consumer suite
+  that kept the upstream plugin enabled saw the health check fire even after suppressing it
+  through `@settings(suppress_health_check=[...])`. Member names and integer values already
+  matched upstream and the engine consumes suppression by name, so behaviour is otherwise
+  unchanged.
+
 ## 0.0.1 — initial public alpha
 
 First public release. A native-Rust reimplementation of [Hypothesis](https://hypothesis.readthedocs.io/),

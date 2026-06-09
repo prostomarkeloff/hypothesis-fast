@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from hypothesis_fast import assume, example, given, settings
+from hypothesis_fast import HealthCheck, assume, example, given, settings
 from hypothesis_fast import strategies as st
 
 
@@ -88,3 +88,53 @@ class TestMethods:
     @given(st.integers(0, 10))
     def test_method(self, n):
         assert 0 <= n <= 10
+
+
+def test_healthcheck_shares_identity_with_upstream():
+    """When the real `hypothesis` is importable, our HealthCheck must BE its enum.
+
+    The upstream pytest plugin gates its function-scoped-fixture warning on
+    `HealthCheck.function_scoped_fixture in settings.suppress_health_check`, compared by
+    enum identity. Two distinct enums make that membership test silently false, so the
+    plugin re-flags suppressed fixtures in any consumer suite that keeps the upstream
+    plugin enabled. Regression for that cross-package enum-identity mismatch.
+    """
+    hypothesis = pytest.importorskip("hypothesis")
+
+    assert HealthCheck is hypothesis.HealthCheck
+    suppressed = settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+    assert hypothesis.HealthCheck.function_scoped_fixture in suppressed.suppress_health_check
+
+
+def test_function_scoped_fixture_suppression_respected_under_upstream_plugin(pytester, monkeypatch):
+    """End-to-end: with the upstream `hypothesis` pytest plugin enabled, suppressing the
+    function-scoped-fixture health check through our `@settings` must actually suppress it.
+
+    Our own `make test` runs with `-p no:hypothesispytest`, so this drives a clean
+    subprocess pytest (PYTEST_ADDOPTS cleared) where the plugin auto-loads via its entry
+    point — exactly the consumer configuration that surfaced the bug.
+    """
+    pytest.importorskip("hypothesis")
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    pytester.makepyfile(
+        """
+        import pytest
+
+        from hypothesis_fast import HealthCheck, given, settings
+        from hypothesis_fast import strategies as st
+
+
+        @pytest.fixture
+        def offset():
+            return 1000
+
+
+        @settings(max_examples=5, suppress_health_check=[HealthCheck.function_scoped_fixture])
+        @given(n=st.integers(0, 10))
+        def test_uses_function_scoped_fixture(offset, n):
+            assert offset == 1000
+            assert 0 <= n <= 10
+        """
+    )
+    result = pytester.runpytest_subprocess()
+    result.assert_outcomes(passed=1)
