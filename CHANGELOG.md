@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.3
+
+- Performance: cut the engine's fixed per-example overhead ~2.7× (≈16.9 → 6.3 µs) by building the
+  per-run `BuildContext` once and reusing it across examples, instead of reconstructing a throwaway
+  `ConjectureData` + `BuildContext` on every example. The realised speedup scales with how cheap
+  each example is: the simplest tests — a bare `integers()`/`text()` with a trivial body — run
+  ~2.5–2.7× faster than before (≈33–38× upstream), while generation-heavy strategies, already
+  dominated by the draw itself, are roughly unchanged. The realistic per-strategy generation battery
+  is a geometric mean ~9.3× upstream. See BENCHMARKS.md.
+- No public API or behaviour change; the unmodified upstream Hypothesis test suite still runs with
+  0 failures.
+
 ## 0.0.2
 
 - Fix: `HealthCheck` now shares object identity with the real `hypothesis` enum when that

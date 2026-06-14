@@ -1,6 +1,6 @@
 # hypothesis-fast — benchmarks
 
-Native Rust engine vs the real `hypothesis` package. Captured **2026-06-08**.
+Native Rust engine vs the real `hypothesis` package. Captured **2026-06-14**.
 
 Every run: **same interpreter** (the repo `.venv`, or each project's own venv for the e2e
 suites), **same tests**, **same settings** (so both engines do the same amount of work). Real =
@@ -30,35 +30,56 @@ flatter the multiplier.
 
 | strategy | real ex/s | native ex/s | speedup | native MB/s |
 |---|--:|--:|--:|--:|
-| email (`from_regex`) | 912 | 16,990 | **18.6×** | 0.261 |
-| url (`from_regex`) | 851 | 17,443 | **20.5×** | 0.364 |
-| order_nested (`builds` + line items) | 377 | 9,135 | **24.2×** | 1.550 |
-| user_record (`@composite`) | 787 | 10,259 | **13.0×** | 1.201 |
-| api_json_payload (`recursive`) | 948 | 12,231 | **12.9×** | 0.385 |
-| address_record (`builds`) | 1,683 | 20,026 | **11.9×** | 0.556 |
-| ipv4 | 3,195 | 23,029 | 7.2× | 0.564 |
-| money (decimal, 2 dp) | 3,717 | 21,224 | 5.7× | 0.351 |
-| uuid | 4,367 | 22,663 | 5.2× | 0.997 |
-| person_name | 4,732 | 23,375 | 4.9× | 0.120 |
-| event_batch (list of typed events) | 900 | 3,427 | 3.8× | 1.823 |
-| timestamp | 4,061 | 15,047 | 3.7× | 0.712 |
+| email (`from_regex`) | 917 | 18,234 | **19.9×** | 0.280 |
+| url (`from_regex`) | 893 | 18,581 | **20.8×** | 0.387 |
+| order_nested (`builds` + line items) | 375 | 9,093 | **24.2×** | 1.552 |
+| user_record (`@composite`) | 756 | 9,767 | **12.9×** | 1.146 |
+| api_json_payload (`recursive`) | 927 | 12,159 | **13.1×** | 0.423 |
+| address_record (`builds`) | 1,691 | 19,989 | **11.8×** | 0.553 |
+| ipv4 | 3,166 | 24,523 | 7.7× | 0.600 |
+| money (decimal, 2 dp) | 3,658 | 22,380 | 6.1× | 0.370 |
+| uuid | 4,226 | 24,588 | 5.8× | 1.082 |
+| person_name | 4,669 | 25,619 | 5.5× | 0.132 |
+| event_batch (list of typed events) | 872 | 3,286 | 3.8× | 1.791 |
+| timestamp | 4,001 | 15,055 | 3.8× | 0.712 |
 
-**Speedup: geometric mean 9.0×, median 9.6×, range 3.7×–24×.**
+**Speedup: geometric mean 9.3×, median 9.8×, range 3.8×–24.2×.**
 
 What the numbers actually say:
 
-- **A floor of ~4× on trivial scalars** (name / timestamp / uuid / money). The bottleneck there
-  is *not* the draw — it's that `@given` calls the test body once per example, a Python callback
-  the engine can't remove. Native still hits 15–23k ex/s; real does ~4k. Once the draw is trivial,
-  that callback caps the ratio.
+- **5–8× on light fields** (name / timestamp / uuid / money / ipv4). These aren't overhead-bound —
+  native does real draw work too (assemble a UUID, a tz-aware datetime, a decimal, a string), so
+  the ratio reflects native-vs-upstream *on that work*. The engine's fixed per-example overhead,
+  which dominates the *simplest* tests, is a separate axis — see §1b, where it's ~33×.
 - **12–24× on the structured stuff** that real suites are full of: `from_regex` fields (email/url
-  18–20× — upstream walks the pattern in Python per character; native does it in Rust), nested
+  20× — upstream walks the pattern in Python per character; native does it in Rust), nested
   domain models (order 24× — `builds` + a list of line items, each with a regex SKU, a decimal and
   a uuid: the most Python-per-example of the set), records and recursive API payloads 12–13×.
 - The more work a single example takes to build, the more native wins, because upstream pays the
   Python interpreter in proportion to that work and native does not.
 
 Single run each (per-strategy fixed-time, 4 s/strategy); expect a few percent of run-to-run noise.
+
+### 1b. Per-example overhead — the simplest tests
+
+The table above is *generation-dominated*: heavy strategies where building the value is the work.
+But the engine also pays a fixed cost per `@given` example regardless of strategy — building the
+test context, pinning the PRNGs. That overhead is what caps the *simplest* tests: a bare scalar
+strategy with a cheap assertion, the most common shape of everyday property tests, where there's
+almost nothing to draw.
+
+Measured as a single `@given` call of `max_examples=5000` with a trivial body, so per-call setup
+amortizes away and only the per-example cost remains:
+
+| simplest test | upstream | hypothesis-fast | speedup | µs/example (fast) |
+|---|--:|--:|--:|--:|
+| `@given(st.integers())` | 5,029 ex/s | 166,428 ex/s | **33×** | 6.0 |
+| `@given(st.text())` | 4,057 ex/s | 152,541 ex/s | **38×** | 6.6 |
+
+Upstream spends ~200 µs per example in its (Python) Conjecture machinery whatever the strategy;
+hypothesis-fast spends ~6 µs, so when the draw is trivial the gap is widest. A 2026-06 change cut
+this per-example overhead **~2.7×** (16.9 → 6.3 µs) by building the per-run test context once and
+reusing it across examples instead of reconstructing it every example.
 
 ---
 
@@ -93,25 +114,9 @@ attempt, unrelated to the engine.)
 Speed is only worth anything if the results match. The bar:
 
 - **Parity suite** — the unmodified upstream Hypothesis test files run against this engine:
-  **0 failed, 3865 passed** (42 skipped, 37 xfailed, 12 xpassed; n=3956), lint clean. Stateful
-  included (`test_stateful` 89/90 + 1 documented xfail).
+  **0 failed, 3864 passed** (42 skipped, ~39 xfailed, ~11 xpassed; n=3956), lint clean. Stateful
+  included (`test_stateful` 89/90 + 1 documented xfail). (A handful of seed-/parallel-sensitive
+  filter/charmap tests are `xfail(strict=False)`, so xfailed/xpassed shift a little run to run.)
 - **Surveyed real projects** — 15 hypothesis-using projects run native-vs-real; 14/15 are
   0-gap drop-ins (a native failure that isn't also a real failure). The 15th
   (`schemathesis`) needs live HTTP servers, not the engine.
-
----
-
-## Reproduce
-
-The bench harness lives in the repo's dev tree (`_external/`, not shipped in a release).
-
-```bash
-# generation throughput — realistic per-strategy battery, one engine per process
-timeout 60 uv run python _external/bench_gen_time.py > /tmp/gen-real.tsv
-timeout 60 env HF_SHIM=1 PYTHONPATH="$PWD/_external/shim:$PWD/python" \
-  uv run python _external/bench_gen_time.py > /tmp/gen-native.tsv
-uv run python _external/bench_gen_combine.py /tmp/gen-real.tsv /tmp/gen-native.tsv   # per-strategy speedup + geomean
-
-# end-to-end on a real project (clones, installs, benches real then native)
-bash tests_materials/scripts/bench-validate.sh python-attrs/cattrs both
-```
