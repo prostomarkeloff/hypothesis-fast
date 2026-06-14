@@ -376,7 +376,15 @@ _XFAIL = {
     # guided search reliably finds it. leap-day = Feb 29 in a 2-year range; both-zeros =
     # drawing BOTH +0.0 and -0.0 in [-1, 1]; the charmap entry is a file-write race.
     # native resampling distribution differs from real's guided resampling, so this
-    # statistical assertion occasionally misses within the budget.
+    # statistical assertion occasionally misses within the budget. Keyed by base nodeid
+    # (matches every param) and strict=False, so they xpass on the common runs but never turn
+    # the per-config baseline gate red when the rare value isn't hit. Confirmed flipping:
+    # both_zeros flaked on macos-py313 in CI while passing in the baseline-generating run.
+    "test_float_nastiness.py::test_can_generate_both_zeros": _NATIVE,
+    "test_float_nastiness.py::test_can_generate_both_zeros_when_in_interval": _NATIVE,
+    "test_datetimes.py::test_bordering_on_a_leap_year": _NATIVE,
+    "test_nothing.py::test_resampling": _NATIVE,
+    "test_health_checks.py::test_filtering_most_things_fails_a_health_check": _NATIVE,
     # linecache parallel flake — passes in isolation, intermittently reports 'unknown'
     # vs the expected lambda source under concurrent worker linecache state.
 
