@@ -1,5 +1,5 @@
 {
- "_about": "Expected per-test outcomes of the upstream-Hypothesis parity suite (pytest-fast --runs 1) for config macos-py314. xfailed/xpassed normalized to 'xfail'. Regenerate on this config with `make parity-baseline`; CI diffs every run against the matching {os}-py{ver} file.",
+ "_about": "Expected per-test outcomes of the upstream-Hypothesis parity suite (pytest-fast --runs 1) for config linux-py314. xfailed/xpassed normalized to 'xfail'. Regenerate on this config with `make parity-baseline`; CI diffs every run against the matching {os}-py{ver} file.",
  "outcomes": {
   "tests/hypothesis_compat/extra_numpy/test_argument_validation.py::test_raise_invalid_argument[array_dtypes(min_size=-1)]": "passed",
   "tests/hypothesis_compat/extra_numpy/test_argument_validation.py::test_raise_invalid_argument[array_dtypes(min_size=2, max_size=1)]": "passed",
