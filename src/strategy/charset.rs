@@ -625,7 +625,7 @@ pub(crate) fn build_characters_intervals(
     if codec.as_deref() == Some("ascii") {
         hi = hi.min(127);
     }
-    let mut base = IntervalSet::from_pairs(intervals_for_categories(&allowed));
+    let mut base = IntervalSet::from_pairs(intervals_for_categories(py, &allowed)?);
     // restrict to [lo, hi]
     let window = IntervalSet::from_pairs(vec![(lo, hi)]);
     base = base.intersection_rs(&window);

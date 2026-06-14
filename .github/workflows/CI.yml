@@ -37,11 +37,20 @@ jobs:
       - run: uv run ruff check python tests bin
       - run: uv run pyright python
 
+  # Parity outcomes differ legitimately by (OS, Python) — different builtins/tests collect, Union
+  # reprs differ, the Unicode DB version differs — so this is a matrix, each config diffed against
+  # its own committed baseline (tests/parity_baselines/{os}-py{ver}.json). Windows is wheels-only:
+  # pytest-fast is POSIX-only, so it can't run the parity suite there.
   test:
-    name: parity suite (upstream Hypothesis tests)
-    runs-on: ubuntu-latest
+    name: parity (${{ matrix.os }} py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
     env:
-      UV_PYTHON: "3.12"
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -49,15 +58,23 @@ jobs:
       - run: uv sync
       - run: uv run maturin develop --release
       # Single-process pytest-fast (`--runs 1`) — no resident daemon to outlive the job; full
-      # collection (numpy extra included via the dev group). `--dump` writes the per-test outcome
-      # map, which the comparator diffs against the committed baseline (tests/parity_outcomes.json):
-      # any drop / addition / regression / mark-change fails CI, so silent drift can't pass green.
-      - name: Run the parity suite + diff outcomes vs the committed baseline
+      # collection (numpy extra via the dev group). `--dump` writes the per-test outcome map, which
+      # the comparator diffs against this config's baseline: any drop / addition / regression /
+      # mark-change fails. A config with no baseline yet still fails on real failures (bootstrap).
+      - name: Run the parity suite + diff outcomes vs the per-config baseline
         env:
           PYTEST_ADDOPTS: "-p no:hypothesispytest -p no:cacheprovider -p pytester --timeout=120 --timeout-method=thread tests/hypothesis_compat"
         run: |
           uv run pytest-fast --runs 1 --workers 2 --dump "$RUNNER_TEMP/outcomes.json" || true
           uv run python tests/check_parity_outcomes.py "$RUNNER_TEMP/outcomes.json"
+      # Always upload the dump so a new/failing config's outcomes can seed or update its baseline.
+      - name: Upload outcome dump
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-dump-${{ matrix.os }}-py${{ matrix.python }}
+          path: ${{ runner.temp }}/outcomes.json
+          if-no-files-found: ignore
 
   linux:
     name: wheels (linux ${{ matrix.target }})
