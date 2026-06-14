@@ -1,0 +1,160 @@
+# Lint + the upstream-Hypothesis parity suite on every push/PR; on a version tag (`vX.Y.Z`)
+# build per-platform abi3 wheels + sdist, attach them to the GitHub Release, and publish to PyPI.
+#
+# PyPI upload uses Trusted Publishing (OIDC) — no token secret. One-time setup on PyPI:
+#   pypi.org -> hypothesis-fast -> Settings -> Publishing -> add a GitHub Actions publisher
+#   (owner: prostomarkeloff, repo: hypothesis-fast, workflow: CI.yml). Until that exists the
+#   `release` job's publish step fails; everything else is independent of it.
+#
+# abi3 (pyo3 abi3-py311) -> one wheel per platform/arch covers CPython 3.11+, so no per-Python matrix.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint (clippy + ruff + pyright)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: astral-sh/setup-uv@v5
+      - run: cargo clippy --all-targets
+      - run: uv sync
+      - run: uv run maturin develop --release   # pyright needs the built _engine importable
+      - run: uv run ruff check python tests bin
+      - run: uv run pyright python
+
+  test:
+    name: parity suite (upstream Hypothesis tests)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run maturin develop --release
+      # Single-process pytest-fast (`--runs 1`) — no resident daemon to outlive the job; full
+      # collection (numpy extra included via the dev group). `--dump` writes the per-test outcome
+      # map, which the comparator diffs against the committed baseline (tests/parity_outcomes.json):
+      # any drop / addition / regression / mark-change fails CI, so silent drift can't pass green.
+      - name: Run the parity suite + diff outcomes vs the committed baseline
+        env:
+          PYTEST_ADDOPTS: "-p no:hypothesispytest -p no:cacheprovider -p pytester --timeout=120 --timeout-method=thread tests/hypothesis_compat"
+        run: |
+          uv run pytest-fast --runs 1 --workers 2 --dump "$RUNNER_TEMP/outcomes.json" || true
+          uv run python tests/check_parity_outcomes.py "$RUNNER_TEMP/outcomes.json"
+
+  linux:
+    name: wheels (linux ${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          sccache: "true"
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  macos:
+    name: wheels (macos ${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: dist
+
+  windows:
+    name: wheels (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x64
+          args: --release --out dist
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows
+          path: dist
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  release:
+    name: release (GitHub + PyPI)
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [lint, test, linux, macos, windows, sdist]
+    permissions:
+      contents: write   # create/attach to the GitHub Release
+      id-token: write   # PyPI Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+      - name: Attach wheels + sdist to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
