@@ -39,16 +39,21 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
       - run: uv run maturin develop --release
-      - name: Upgrade to the latest released hypothesis
-        if: matrix.upgrade == 'yes'
-        run: uv pip install --upgrade hypothesis
-      - name: Fetch parity tests (pinned ref, or the latest package's version tag)
+      - name: Select hypothesis version + fetch parity tests
         run: |
           if [ "${{ matrix.latest_tests }}" = "yes" ]; then
-            V=$(uv run --no-sync python -c "import hypothesis; print(hypothesis.__version__)")
-            export HF_UPSTREAM_REF="hypothesis-python-$V"
-            export HF_FETCH_TOLERANT=1   # latest ref may have renamed/removed pinned-manifest files
-            echo "fetching latest tests @ $HF_UPSTREAM_REF (tolerant)"
+            # latest-tests: align the package AND tests at the newest GitHub release TAG. We use the
+            # tag (not the PyPI version) because PyPI can be ahead of the tags — a tag derived from
+            # the PyPI version may 404. The latest tag is guaranteed to have both a release and tests.
+            TAG=$(git ls-remote --tags https://github.com/HypothesisWorks/hypothesis 'hypothesis-python-*' \
+                  | sed -E 's#.*refs/tags/##' | grep -E '^hypothesis-python-[0-9.]+$' | sort -V | tail -1)
+            VER="${TAG#hypothesis-python-}"
+            echo "latest tagged hypothesis = $VER ($TAG)"
+            uv pip install "hypothesis==$VER"
+            export HF_UPSTREAM_REF="$TAG" HF_FETCH_TOLERANT=1
+          elif [ "${{ matrix.upgrade }}" = "yes" ]; then
+            # latest-package: newest PyPI release vs the PINNED tests.
+            uv pip install --upgrade hypothesis
           fi
           bash tests/hypothesis_compat/fetch_upstream_tests.sh
       - name: Run parity + check
