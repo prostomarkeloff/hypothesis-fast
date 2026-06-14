@@ -27,10 +27,22 @@ SRC="$(find "$TMP" -maxdepth 3 -type d -path '*/hypothesis-python/tests' -print 
 [ -n "$SRC" ] || { echo "ERROR: no hypothesis-python/tests/ in the $REF archive" >&2; exit 1; }
 
 n=0
+skipped=0
 while IFS= read -r rel; do
   [ -n "$rel" ] || continue
   src="$SRC/$rel"
-  [ -f "$src" ] || { echo "ERROR: $rel absent in upstream @ $REF (bump/adjust UPSTREAM_FILES)" >&2; exit 1; }
+  if [ ! -f "$src" ]; then
+    # HF_FETCH_TOLERANT (the scheduled latest-tests scenario fetches the PINNED file list at a
+    # NEWER ref, where upstream may have renamed/removed files): warn + skip instead of failing,
+    # so the scenario still runs the tests that DO exist. Default (pinned ref): hard error.
+    if [ -n "${HF_FETCH_TOLERANT:-}" ]; then
+      echo "SKIP (absent @ $REF): $rel" >&2
+      skipped=$((skipped + 1))
+      continue
+    fi
+    echo "ERROR: $rel absent in upstream @ $REF (bump/adjust UPSTREAM_FILES)" >&2
+    exit 1
+  fi
   case "$rel" in
     numpy/*) dest="$HERE/extra_numpy/$(basename "$rel")" ;;
     *) dest="$HERE/$(basename "$rel")" ;;
@@ -39,4 +51,4 @@ while IFS= read -r rel; do
   n=$((n + 1))
 done < "$HERE/UPSTREAM_FILES"
 
-echo ">>> fetched $n parity test files into tests/hypothesis_compat/ at $REF"
+echo ">>> fetched $n parity test files into tests/hypothesis_compat/ at $REF (skipped $skipped absent)"

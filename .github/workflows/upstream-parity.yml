@@ -47,7 +47,8 @@ jobs:
           if [ "${{ matrix.latest_tests }}" = "yes" ]; then
             V=$(uv run --no-sync python -c "import hypothesis; print(hypothesis.__version__)")
             export HF_UPSTREAM_REF="hypothesis-python-$V"
-            echo "fetching latest tests @ $HF_UPSTREAM_REF"
+            export HF_FETCH_TOLERANT=1   # latest ref may have renamed/removed pinned-manifest files
+            echo "fetching latest tests @ $HF_UPSTREAM_REF (tolerant)"
           fi
           bash tests/hypothesis_compat/fetch_upstream_tests.sh
       - name: Run parity + check
@@ -71,6 +72,13 @@ jobs:
             const fs = require('fs');
             let tail = '';
             try { tail = fs.readFileSync('/tmp/parity.log', 'utf8').split('\n').slice(-60).join('\n'); } catch (e) {}
+            // Never open an empty/broken issue: a non-empty parity log means the comparator
+            // actually ran and found a divergence. No log => an infra/setup failure (the red run
+            // is the signal); skip issue creation.
+            if (!tail.trim()) {
+              core.notice('No parity diff captured (infra/setup failure, not a parity divergence) — not opening an issue.');
+              return;
+            }
             const sc = process.env.SCENARIO, osn = process.env.OSNAME;
             const intro = {
               'self': 'PINNED tests + PINNED package diverged from the committed baseline — WE may have broken parity, or non-code drift. The per-push CI gate should also be red; this catches drift between pushes.',
