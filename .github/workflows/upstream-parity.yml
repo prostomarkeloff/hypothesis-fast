@@ -1,14 +1,18 @@
-# Scheduled early-warning: run the parity suite against the LATEST released `hypothesis` (not the
-# locked floor). A new upstream release can change internals our compatibility layer leans on
-# (errors / control / internal.conjecture / entropy) or the public drop-in surface; if that breaks
-# the suite, open a GitHub issue (or comment on the existing open one, to avoid duplicates).
+# Scheduled parity watchdog — three scenarios, each opens/updates a labelled `upstream-break`
+# issue on failure (the per-push CI gate stays the blocking check; this is early-warning):
 #
-# The regular CI `test` job pins hypothesis via the lockfile; THIS job deliberately floats to latest.
+#   self            pinned tests + pinned package, vs the committed baseline. "Did WE break parity?"
+#                   (or non-code drift). Runs on BOTH OSes — the per-push gate covers this too, but
+#                   this catches drift between pushes / environment shifts.
+#   latest-package  pinned tests + LATEST hypothesis package, vs the committed baseline. "Did a new
+#                   hypothesis release change an internal our compatibility layer leans on?"
+#   latest-tests    LATEST hypothesis tests + LATEST package, failures-only. "Do we still PASS the
+#                   newest upstream test suite?" (the test ref is the latest package's version tag).
 name: upstream-parity
 
 on:
   schedule:
-    - cron: "0 6 * * 1" # Mondays 06:00 UTC — adjust cadence as upstream release frequency warrants
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -17,8 +21,16 @@ permissions:
 
 jobs:
   parity:
-    name: parity vs latest hypothesis
-    runs-on: ubuntu-latest
+    name: "${{ matrix.scenario }} (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, scenario: self, upgrade: "no", latest_tests: "no", mode: baseline }
+          - { os: macos-latest, scenario: self, upgrade: "no", latest_tests: "no", mode: baseline }
+          - { os: ubuntu-latest, scenario: latest-package, upgrade: "yes", latest_tests: "no", mode: baseline }
+          - { os: ubuntu-latest, scenario: latest-tests, upgrade: "yes", latest_tests: "yes", mode: "failures-only" }
     env:
       UV_PYTHON: "3.13"
     steps:
@@ -27,61 +39,57 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
       - run: uv run maturin develop --release
-      # Float hypothesis to the newest PyPI release (the lock floor is only >=6). `--no-sync` on the
-      # run below keeps this upgrade from being reverted back to the locked version.
       - name: Upgrade to the latest released hypothesis
+        if: matrix.upgrade == 'yes'
         run: uv pip install --upgrade hypothesis
-      - name: Record the hypothesis version under test
-        id: ver
-        run: echo "hyp=$(uv run --no-sync python -c 'import hypothesis; print(hypothesis.__version__)')" >> "$GITHUB_OUTPUT"
-      # Run the suite against latest hypothesis and diff its per-test outcomes against the
-      # committed baseline. A "break" = the comparator finds a drop/regression/mark-change vs the
-      # baseline that the locked-hypothesis CI doesn't — i.e. a new upstream release moved something.
-      - name: Run parity suite vs latest hypothesis + diff against baseline
+      - name: Fetch parity tests (pinned ref, or the latest package's version tag)
+        run: |
+          if [ "${{ matrix.latest_tests }}" = "yes" ]; then
+            V=$(uv run --no-sync python -c "import hypothesis; print(hypothesis.__version__)")
+            export HF_UPSTREAM_REF="hypothesis-python-$V"
+            echo "fetching latest tests @ $HF_UPSTREAM_REF"
+          fi
+          bash tests/hypothesis_compat/fetch_upstream_tests.sh
+      - name: Run parity + check
         id: parity
         env:
           PYTEST_ADDOPTS: "-p no:hypothesispytest -p no:cacheprovider -p pytester --timeout=120 --timeout-method=thread tests/hypothesis_compat"
         run: |
           set -o pipefail
           uv run --no-sync pytest-fast --runs 1 --workers 2 --dump /tmp/outcomes.json || true
-          uv run --no-sync python tests/check_parity_outcomes.py /tmp/outcomes.json 2>&1 | tee /tmp/parity.log
-      - name: Open / update an issue on breakage
-        if: failure() && steps.parity.outcome == 'failure'
+          FLAG=""
+          [ "${{ matrix.mode }}" = "failures-only" ] && FLAG="--failures-only"
+          uv run --no-sync python tests/check_parity_outcomes.py /tmp/outcomes.json $FLAG 2>&1 | tee /tmp/parity.log
+      - name: Open / update an issue on failure
+        if: failure()
         uses: actions/github-script@v7
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+          OSNAME: ${{ matrix.os }}
         with:
           script: |
             const fs = require('fs');
-            const hyp = '${{ steps.ver.outputs.hyp }}' || 'unknown';
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             let tail = '';
             try { tail = fs.readFileSync('/tmp/parity.log', 'utf8').split('\n').slice(-60).join('\n'); } catch (e) {}
-            const label = 'upstream-break';
-            const title = `Parity break against hypothesis ${hyp}`;
-            const body = [
-              `The scheduled parity run failed against **hypothesis ${hyp}** (latest on PyPI).`,
-              ``,
-              `A new upstream Hypothesis release may have changed internals our compatibility layer`,
-              `depends on (errors / control / internal.conjecture / entropy) or the public drop-in`,
-              `surface. The regular CI \`test\` job (locked hypothesis) is unaffected — this is the`,
-              `float-to-latest early-warning.`,
-              ``,
-              `Run: ${runUrl}`,
-              ``,
-              '```',
-              (tail.trim() || '(no log captured)'),
-              '```',
-            ].join('\n');
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: label,
+            const sc = process.env.SCENARIO, osn = process.env.OSNAME;
+            const intro = {
+              'self': 'PINNED tests + PINNED package diverged from the committed baseline — WE may have broken parity, or non-code drift. The per-push CI gate should also be red; this catches drift between pushes.',
+              'latest-package': 'The LATEST released hypothesis package broke our pinned parity tests — likely an upstream internals change our compatibility layer (errors/control/internal.conjecture/entropy) depends on.',
+              'latest-tests': 'We FAIL one or more tests in the LATEST hypothesis test suite (latest tests + latest package).',
+            }[sc] || 'Parity check failed.';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `[parity] ${sc} on ${osn}`;
+            const body = [intro, '', `Run: ${runUrl}`, '', '```', (tail.trim() || '(no log captured)'), '```'].join('\n');
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: 'upstream-break',
             });
-            if (existing.data.length > 0) {
+            const found = open.data.find((i) => i.title === title);
+            if (found) {
               await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: existing.data[0].number, body,
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: found.number, body,
               });
             } else {
               await github.rest.issues.create({
-                owner: context.repo.owner, repo: context.repo.repo,
-                title, body, labels: [label],
+                owner: context.repo.owner, repo: context.repo.repo, title, body, labels: ['upstream-break'],
               });
             }

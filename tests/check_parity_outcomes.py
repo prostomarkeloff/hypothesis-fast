@@ -62,11 +62,23 @@ def section(title: str, rows: list[str]) -> None:
 def main() -> int:
     args = sys.argv[1:]
     if not args:
-        raise SystemExit("usage: check_parity_outcomes.py <dump.json> [--update]")
+        raise SystemExit("usage: check_parity_outcomes.py <dump.json> [--update|--failures-only]")
     run = load_run(args[0])
 
     if "--update" in args:
         write_baseline(run)
+        return 0
+
+    # --failures-only: ignore the (pinned-version) baseline entirely and just fail on real
+    # failures. Used by the scheduled job that fetches the LATEST upstream tests — "do we still
+    # PASS the newest suite?" — where a full diff vs the pinned baseline would be all test churn.
+    if "--failures-only" in args:
+        bad = sorted(k for k, v in run.items() if v in ("failed", "error"))
+        print(f"parity [{CONFIG}, failures-only]: {len(run)} tests run, {len(bad)} failed/error")
+        if bad:
+            section("FAILED/ERROR", [f"! {k}: {run[k]}" for k in bad])
+            return 1
+        print("\nNO FAILURES")
         return 0
 
     if not BASELINE.exists():

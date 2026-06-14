@@ -40,7 +40,7 @@ FAST = $(WATCH_ENV) $(UV) run pytest-fast --ttl $(TTL)
 # find-dup-defs is a cargo-installed binary (auto-installed by the `$(DUP_DEFS)` rule).
 DUP_DEFS := $(HOME)/.cargo/bin/find-dup-defs
 
-.PHONY: help test lint-heavy native build kill probe parity-check parity-baseline
+.PHONY: help test lint-heavy native build kill probe parity-check parity-baseline fetch-tests
 
 help:
 	@echo "PRIMARY:"
@@ -50,9 +50,23 @@ help:
 	@echo "  make build       - maturin develop --release, then restart the daemon(s) (fresh .so)"
 	@echo "  make probe FILE=test_x.py - one cover file via a separate daemon"
 	@echo "  make native      - native package tests via pytest-fast"
+	@echo "  make fetch-tests - (re)fetch the upstream parity tests at tests/hypothesis_compat/UPSTREAM_REF"
 	@echo "  make kill        - stop the daemon/watcher and remove its sockets"
 	@echo
 	@echo "workers auto-detect to the perf-core count; override with PYTEST_FAST_WORKERS=N."
+
+# The upstream parity tests are NOT vendored — they're fetched at the pinned UPSTREAM_REF (see
+# tests/hypothesis_compat/fetch_upstream_tests.sh). The parity-running targets auto-fetch them
+# once if absent (fresh clone); `make fetch-tests` forces a re-fetch (e.g. after bumping the ref).
+PARITY_TESTS_SENTINEL := tests/hypothesis_compat/test_core.py
+
+fetch-tests:
+	bash tests/hypothesis_compat/fetch_upstream_tests.sh
+
+$(PARITY_TESTS_SENTINEL):
+	bash tests/hypothesis_compat/fetch_upstream_tests.sh
+
+test probe parity-check parity-baseline: $(PARITY_TESTS_SENTINEL)
 
 # ── PRIMARY: full parity suite ───────────────────────────────────────────────
 # A warm pytest-fast daemon (forkserver + collect-once + work-stealing) that auto-respawns
