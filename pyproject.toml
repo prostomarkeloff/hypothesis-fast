@@ -32,7 +32,7 @@ dev = [
     "pytest>=8",
     "maturin>=1.0,<2.0",
     "hypothesis>=6",
-    "pytest-fast @ git+https://github.com/prostomarkeloff/pytest-fast.git@v0.7.2",
+    "pytest-fast>=0.7.2",
     "pytest-timeout>=2.4",
 ]
 

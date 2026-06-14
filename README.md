@@ -127,12 +127,20 @@ passes.
 
 ## Install
 
-Alpha, not on PyPI yet — install from git with uv:
+Alpha (pre-release). From PyPI with uv (or `pip install`):
+
+```sh
+uv add hypothesis-fast
+# with the internal-strategy fallback to real hypothesis:
+uv add "hypothesis-fast[fallback]"
+```
+
+Prebuilt wheels are currently **macOS (Apple Silicon)** only; on other platforms the install
+builds from the sdist, which needs a Rust toolchain ([`rustup`](https://rustup.rs)). Installing
+from git, for the latest unreleased commit, has the same requirement:
 
 ```sh
 uv add git+https://github.com/prostomarkeloff/hypothesis-fast.git
-# with the internal-strategy fallback:
-uv add "hypothesis-fast[fallback] @ git+https://github.com/prostomarkeloff/hypothesis-fast.git"
 ```
 
 ## Develop
