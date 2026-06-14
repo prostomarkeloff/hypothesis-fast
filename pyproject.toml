@@ -28,13 +28,6 @@ Issues = "https://github.com/prostomarkeloff/hypothesis-fast/issues"
 
 [project.optional-dependencies]
 fallback = ["hypothesis>=6"]
-dev = [
-    "pytest>=8",
-    "maturin>=1.0,<2.0",
-    "hypothesis>=6",
-    "pytest-fast>=0.7.2",
-    "pytest-timeout>=2.4",
-]
 
 [tool.uv]
 # `make test` runs through `uv run`, which syncs default-groups — include `test`
@@ -67,7 +60,17 @@ reportMissingModuleSource = false
 reportAttributeAccessIssue = false
 
 [dependency-groups]
+# Dev tooling — a PEP 735 group, NOT part of the published wheel/sdist metadata, so `uv sync`
+# installs it via `default-groups` (end users never receive these). numpy is REQUIRED for the
+# hypothesis.extra.numpy parity tests to COLLECT (~439 of them); without it that whole subtree
+# is silently skipped (n drops 3956 -> 3517) — it's not a runtime dependency of the package.
 dev = [
+    "pytest>=8",
+    "maturin>=1.0,<2.0",
+    "hypothesis>=6",
+    "numpy>=2",
+    "pytest-fast>=0.9.3",
+    "pytest-timeout>=2.4",
     "pyright>=1.1.409",
     "ruff>=0.15.15",
 ]

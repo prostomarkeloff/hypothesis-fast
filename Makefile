@@ -40,7 +40,7 @@ FAST = $(WATCH_ENV) $(UV) run pytest-fast --ttl $(TTL)
 # find-dup-defs is a cargo-installed binary (auto-installed by the `$(DUP_DEFS)` rule).
 DUP_DEFS := $(HOME)/.cargo/bin/find-dup-defs
 
-.PHONY: help test lint-heavy native build kill probe
+.PHONY: help test lint-heavy native build kill probe parity-check parity-baseline
 
 help:
 	@echo "PRIMARY:"
@@ -109,3 +109,20 @@ kill:
 	       $(SOCK).staging $(SOCK).staging.pid \
 	       $(SOCK_PROBE) $(SOCK_PROBE).pid $(SOCK_PROBE).watcher.lock \
 	       $(SOCK_PROBE).respawn.lock $(SOCK_PROBE).staging $(SOCK_PROBE).staging.pid
+
+# ── PARITY-OUTCOME BASELINE (what CI gates on) ───────────────────────────────
+# Single-process pytest-fast (no resident daemon) writes a {nodeid: outcome} dump, which is
+# diffed against the committed tests/parity_outcomes.json. Any drop / addition / regression /
+# xfail<->pass change fails — the same check CI runs. xfailed/xpassed are normalized (they flip
+# run-to-run), so the comparison is stable.
+PARITY_DUMP    ?= /tmp/hf-parity-$(WT_HASH).json
+PARITY_ADDOPTS  = $(ADDOPTS) --timeout=120 tests/hypothesis_compat
+
+parity-check:
+	-PYTEST_ADDOPTS="$(PARITY_ADDOPTS)" $(UV) run pytest-fast --runs 1 --dump $(PARITY_DUMP)
+	$(UV) run python tests/check_parity_outcomes.py $(PARITY_DUMP)
+
+# Regenerate the committed baseline from a fresh run; review the git diff before committing.
+parity-baseline:
+	-PYTEST_ADDOPTS="$(PARITY_ADDOPTS)" $(UV) run pytest-fast --runs 1 --dump $(PARITY_DUMP)
+	$(UV) run python tests/check_parity_outcomes.py $(PARITY_DUMP) --update

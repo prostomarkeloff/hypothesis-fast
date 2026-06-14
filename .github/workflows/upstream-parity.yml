@@ -1,0 +1,87 @@
+# Scheduled early-warning: run the parity suite against the LATEST released `hypothesis` (not the
+# locked floor). A new upstream release can change internals our compatibility layer leans on
+# (errors / control / internal.conjecture / entropy) or the public drop-in surface; if that breaks
+# the suite, open a GitHub issue (or comment on the existing open one, to avoid duplicates).
+#
+# The regular CI `test` job pins hypothesis via the lockfile; THIS job deliberately floats to latest.
+name: upstream-parity
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC — adjust cadence as upstream release frequency warrants
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  parity:
+    name: parity vs latest hypothesis
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.13"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run maturin develop --release
+      # Float hypothesis to the newest PyPI release (the lock floor is only >=6). `--no-sync` on the
+      # run below keeps this upgrade from being reverted back to the locked version.
+      - name: Upgrade to the latest released hypothesis
+        run: uv pip install --upgrade hypothesis
+      - name: Record the hypothesis version under test
+        id: ver
+        run: echo "hyp=$(uv run --no-sync python -c 'import hypothesis; print(hypothesis.__version__)')" >> "$GITHUB_OUTPUT"
+      # Run the suite against latest hypothesis and diff its per-test outcomes against the
+      # committed baseline. A "break" = the comparator finds a drop/regression/mark-change vs the
+      # baseline that the locked-hypothesis CI doesn't — i.e. a new upstream release moved something.
+      - name: Run parity suite vs latest hypothesis + diff against baseline
+        id: parity
+        env:
+          PYTEST_ADDOPTS: "-p no:hypothesispytest -p no:cacheprovider -p pytester --timeout=120 --timeout-method=thread tests/hypothesis_compat"
+        run: |
+          set -o pipefail
+          uv run --no-sync pytest-fast --runs 1 --workers 2 --dump /tmp/outcomes.json || true
+          uv run --no-sync python tests/check_parity_outcomes.py /tmp/outcomes.json 2>&1 | tee /tmp/parity.log
+      - name: Open / update an issue on breakage
+        if: failure() && steps.parity.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const hyp = '${{ steps.ver.outputs.hyp }}' || 'unknown';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let tail = '';
+            try { tail = fs.readFileSync('/tmp/parity.log', 'utf8').split('\n').slice(-60).join('\n'); } catch (e) {}
+            const label = 'upstream-break';
+            const title = `Parity break against hypothesis ${hyp}`;
+            const body = [
+              `The scheduled parity run failed against **hypothesis ${hyp}** (latest on PyPI).`,
+              ``,
+              `A new upstream Hypothesis release may have changed internals our compatibility layer`,
+              `depends on (errors / control / internal.conjecture / entropy) or the public drop-in`,
+              `surface. The regular CI \`test\` job (locked hypothesis) is unaffected — this is the`,
+              `float-to-latest early-warning.`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              '```',
+              (tail.trim() || '(no log captured)'),
+              '```',
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: label,
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: [label],
+              });
+            }

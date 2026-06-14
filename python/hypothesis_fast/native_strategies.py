@@ -15,6 +15,35 @@ from typing import Any, Callable
 from hypothesis_fast import _engine as _e
 
 
+@functools.cache
+def _unicode_charmap() -> dict[str, list[tuple[int, int]]]:
+    """Map each 2-letter general-category code to merged codepoint intervals, built from the
+    RUNNING interpreter's ``unicodedata`` (called once by the Rust engine's charmap, cached).
+
+    Derived from `unicodedata.category` rather than a fixed table baked into the extension, so
+    `characters(categories=...)` agrees with `unicodedata.category` on whatever Unicode version
+    THIS CPython ships (it differs by release: 3.11→14.0, 3.12→15.0, 3.13→15.1, 3.14→16.0).
+    A fixed table can't match every version at once. `chr()`/`unicodedata.category` handle the
+    surrogate range (U+D800..U+DFFF → 'Cs') directly, so no special-casing is needed.
+    """
+    import unicodedata
+
+    cat = unicodedata.category
+    out: dict[str, list[tuple[int, int]]] = {}
+    last = 0x10FFFF
+    cur = cat(chr(0))
+    start = 0
+    cp = 1
+    while cp <= last + 1:
+        c = cat(chr(cp)) if cp <= last else ""
+        if c != cur:
+            out.setdefault(cur, []).append((start, cp - 1))
+            cur = c
+            start = cp
+        cp += 1
+    return out
+
+
 class _PrettyIter:
     """The value drawn by st.iterables(): an iterator over `_values` with a useful repr
     (`iter([...])`), matching hypothesis (test_iterables_repr_is_useful)."""
@@ -1789,6 +1818,14 @@ def _populate_native_registry() -> None:
         reg(_buffer, lambda t: _e.one_of(
             _e.binary(), _e.binary().map(bytearray), _e.binary().map(memoryview),
         ))
+    # ByteString (deprecated 3.12, removed 3.14): bytes/bytearray are ByteString instances.
+    # Merely reading the attribute warns on 3.12+, so suppress that during the lookup.
+    import warnings as _warn
+    with _warn.catch_warnings():
+        _warn.simplefilter("ignore", DeprecationWarning)
+        _bytestring = getattr(_abc, "ByteString", None)
+    if _bytestring is not None:
+        reg(_bytestring, lambda t: _e.one_of(_e.binary(), _e.binary().map(bytearray)))
     # Sized: anything with __len__ — a list works (isinstance(list, typing.Sized) is True).
     reg(_abc.Sized, lambda t: _e.lists(_e.integers()))
     reg(_abc.Iterator, lambda t: _e.lists(_e.integers()).map(iter))
