@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import platform
 import sys
+from collections import Counter
 from pathlib import Path
 
 BASELINE_DIR = Path(__file__).parent / "parity_baselines"
@@ -101,8 +102,20 @@ def main() -> int:
 
     print(f"parity [{CONFIG}]: {len(run)} tests run vs {len(base)} expected")
     if dropped:
-        section("DROPPED — expected but not run (a hidden file / missing dependency?)",
-                [f"- {k}  (expected {base[k]})" for k in dropped])
+        # Group dropped tests by file and statically flag whole-file drops: when every test a
+        # file contributes to the baseline vanishes, the file failed to COLLECT (an upstream
+        # symbol it imports was removed/renamed) — the root cause, not 19 separate lines.
+        base_per_file = Counter(k.split("::", 1)[0] for k in base_keys)
+        drop_per_file = Counter(k.split("::", 1)[0] for k in dropped)
+        rows = []
+        for f in sorted(drop_per_file):
+            n, total = drop_per_file[f], base_per_file[f]
+            rows.append(
+                f"{f} — ALL {n} tests gone -> the file FAILED TO COLLECT (removed/renamed upstream symbol?)"
+                if n == total
+                else f"{f} — {n}/{total} tests gone"
+            )
+        section("DROPPED (grouped by file)", rows)
     if added:
         section("ADDED — run but not in the baseline", [f"+ {k}  ({run[k]})" for k in added])
     if changed:
