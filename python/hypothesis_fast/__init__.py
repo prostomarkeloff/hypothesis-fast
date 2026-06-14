@@ -35,7 +35,7 @@ from .settings import HealthCheck, Phase, Verbosity, settings
 importlib.import_module(f"{__name__}.strategies")
 strategies = native_strategies
 
-__version__ = "0.0.1"
+__version__ = "0.0.3"
 
 
 def __getattr__(name: str) -> object:

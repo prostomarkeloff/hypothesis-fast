@@ -43,9 +43,16 @@ Two numbers matter: how fast the engine *generates*, and how much that moves a r
 **Generation.** On realistic data — domain records, API payloads, `from_regex` fields, nested
 models, the input a real suite actually builds — example generation runs a geometric mean of
 **~9×** upstream (measured per strategy, since you can't sum ex/s across strategies that produce
-different things). The floor is ~4× on trivial scalars, where one `@given` body call per example,
-not the draw, sets the pace; it climbs to **12–24×** on regex-constrained fields, nested
-dataclasses and recursive JSON — exactly what serialization and schema suites spend their time on.
+different things): **5–6×** on light fields (uuid, timestamp, name), climbing to **12–24×** on
+regex-constrained fields, nested dataclasses and recursive JSON — exactly what serialization and
+schema suites spend their time on.
+
+**Per-example overhead.** Separately from the draw, the engine pays a fixed cost per `@given`
+example — building the test context, pinning PRNGs. That cost is now **~6µs** (down ~2.7× after a
+2026-06 reuse of the per-run build context), so the *simplest* tests — a bare
+`st.integers()`/`st.text()` with a cheap assertion — run **~33×** upstream (166k vs 5k ex/s), where
+upstream's ~200µs-per-example machinery dominates. That's the common shape of everyday property
+tests, and where the engine helps most outside generation-heavy suites.
 
 **End to end.** How much you feel depends on the share of wall time in the engine versus your test
 body. Measured with `pytest-fast --bench` on real projects:

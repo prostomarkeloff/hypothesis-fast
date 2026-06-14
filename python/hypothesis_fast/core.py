@@ -697,22 +697,28 @@ def _describe_targets(best: dict[str, float]) -> list[str]:
     return []
 
 
-def _native_build_context(fn: Callable[..., Any], is_final: bool) -> Any:
-    """A real hypothesis BuildContext around the native test body, so the cover suite's
-    real control APIs (note/event/current_build_context/cleanup/currently_in_test_context)
-    work. Uses a throwaway real ConjectureData (the body runs with concrete args / draws
-    from its own data() object, so this cd is only the context's anchor). is_final=True on
-    the minimal-example replay so note() prints on failure. Null context if real hypothesis
-    isn't importable (standalone use)."""
+def _make_build_context(fn: Callable[..., Any]) -> Any:
+    """Build ONE real hypothesis BuildContext to wrap the native test body, so the cover
+    suite's real control APIs (note/event/current_build_context/cleanup/
+    currently_in_test_context) and stateful's is_final work inside it. Returns the
+    BuildContext (NOT entered) or None if real hypothesis isn't importable (standalone use).
+
+    Built ONCE PER RUN and reused for every example by the runner: the body never draws from
+    this cd (args are drawn in Rust before the body runs), so the same throwaway cd anchors
+    the context for the whole run. The runner resets the per-example mutable state
+    (is_final / tasks / known_object_printers / _label_path) and re-enters it per example via
+    BuildContext.__enter__/__exit__. Reusing one context instead of constructing
+    `ConjectureData.for_choices([]) + BuildContext` every example was ~35% of the trivial-body
+    per-example wall (profiled 2026-06-14)."""
     cd_mod = sys.modules.get("hypothesis.internal.conjecture.data")
     ctrl_mod = sys.modules.get("hypothesis.control")
     if cd_mod is None or ctrl_mod is None:
-        return contextlib.nullcontext()
+        return None
     try:
         data = cd_mod.ConjectureData.for_choices([])
-        return ctrl_mod.BuildContext(data, is_final=is_final, wrapped_test=fn)
+        return ctrl_mod.BuildContext(data, is_final=False, wrapped_test=fn)
     except Exception:  # noqa: BLE001 - any construction failure -> run without a context
-        return contextlib.nullcontext()
+        return None
 
 
 def _real_verbosity_settings(verbosity: Any) -> Any:
@@ -897,11 +903,25 @@ def _native_engine_given(
             )
 
         # Managed PRNGs (global random / numpy / register_random), captured once per run
-        # below as (random, original_state, seed0_state) triples. `runner` re-pins each to
-        # its OWN seed-0 state per example (cheap setstate); the outer save/restore is hoisted
-        # to the run boundary. Per-random seed-0 states are required because the state format
-        # differs by PRNG (a stdlib MT19937 state can't be setstate'd onto numpy's PRNG).
+        # below as (random, original_state, seed0_state) triples. The outer save/restore is
+        # hoisted to the run boundary (`_run_rng`). Per-random seed-0 states are required
+        # because the state format differs by PRNG (a stdlib MT19937 state can't be
+        # setstate'd onto numpy's PRNG).
+        #
+        # `_run_rng` = ALL managed PRNGs, for the run-level save/restore.
+        # `_run_rng_pin` = the SUBSET re-pinned to seed-0 per example by `runner`. It
+        # EXCLUDES the master `_hypothesis_global_random`: the master derives the run seed
+        # exactly once (getrandbits(64) at run setup, before any example) and is never read
+        # inside a test body, so pinning it per example is wasted work. Its only invariant —
+        # advance once per run, restore to the advanced state afterward — is enforced by the
+        # run-level getrandbits/save/restore, not by the per-example pin. Dropping it halves
+        # the per-example setstate cost (2 PRNGs -> 1: the global `random` module).
         _run_rng: list[Any] = []
+        _run_rng_pin: list[Any] = []
+        # The run-level real BuildContext, built ONCE in run setup and reused by `runner` for
+        # every example (a 1-element box so the closure reads the value set in run setup).
+        # None when real hypothesis isn't importable -> runner uses a nullcontext.
+        _bc: list[Any] = [None]
 
         def runner(*drawn: Any) -> Any:
             call = dict(bound)
@@ -955,10 +975,30 @@ def _native_engine_given(
                 # (anti-pollution, reproducible incidental random use). Save/restore is at
                 # run level, and we setstate() each PRNG's own precomputed seed-0 state
                 # instead of seed(0) — ~2.6x faster and identical — replacing
-                # deterministic_PRNG's per-example save+dummy-Random+hash dance.
-                for _r, _, _s0 in _run_rng:
+                # deterministic_PRNG's per-example save+dummy-Random+hash dance. The master
+                # (run-seed source, never read in a body) is omitted from `_run_rng_pin`.
+                for _r, _s0 in _run_rng_pin:
                     _r.setstate(_s0)
-                with _vctx, _native_build_context(fn, _is_final):
+                # Reuse the run-level BuildContext (built once in run setup) instead of
+                # constructing a fresh real ConjectureData+BuildContext every example (was
+                # ~35% of the trivial-body per-example wall, profiled 2026-06-14). Reset the
+                # per-example mutable state and re-enter via the real __enter__/__exit__, which
+                # preserve the current_build_context push and the cleanup()-task teardown
+                # contract. _label_path is always balanced in our flow (never pushed — args are
+                # drawn in Rust) but is cleared defensively.
+                _bcx = _bc[0]
+                if _bcx is None:
+                    _body_ctx: Any = contextlib.nullcontext()
+                else:
+                    _bcx.is_final = _is_final
+                    if _bcx.tasks:
+                        _bcx.tasks.clear()
+                    if _bcx.known_object_printers:
+                        _bcx.known_object_printers.clear()
+                    if _bcx._label_path:
+                        _bcx._label_path.clear()
+                    _body_ctx = _bcx
+                with _vctx, _body_ctx:
                     try:
                         if _execute is not None:
                             res = _execute(lambda: _inner(*pos, **call))
@@ -1021,12 +1061,12 @@ def _native_engine_given(
                 raise
             finally:
                 # Always drain the filter draw-event buffer (even when not collecting) so it
-                # can't grow unboundedly across examples under the resident daemon. Local
-                # import: the runner can be called (explicit @example phase) before the
-                # wrapper-level `_ns` binding exists, so don't close over it here.
-                from . import native_strategies as _ns_draw
-
-                _draw_evs = _ns_draw.drain_draw_events()
+                # can't grow unboundedly across examples under the resident daemon. Resolve the
+                # module via sys.modules (a dict lookup) rather than re-running the `from .
+                # import` statement machinery every example (~1.5µs/example); None only before
+                # native_strategies is imported — no native draws yet, so nothing to drain.
+                _ns_draw = sys.modules.get("hypothesis_fast.native_strategies")
+                _draw_evs = _ns_draw.drain_draw_events() if _ns_draw is not None else []
                 if _stats_cases is not None:
                     _evs = drain_events()
                     for _de in _draw_evs:
@@ -1329,11 +1369,18 @@ def _native_engine_given(
             # (it was ~60% of trivial-body time). Also record the global random's seed-0
             # state hash once (for random_module reseed detection).
             _run_rng[:] = []
+            _run_rng_pin[:] = []
+            # The master is never read inside a body (it only sourced `seed` above); exclude
+            # it from the per-example pin while still saving/restoring it at run level.
+            _master = _resolve_threadlocal()._hypothesis_global_random
             for _r in _managed_randoms():
                 try:
                     _orig = _r.getstate()
                     _r.seed(0)
-                    _run_rng.append((_r, _orig, _r.getstate()))
+                    _s0 = _r.getstate()
+                    _run_rng.append((_r, _orig, _s0))
+                    if _r is not _master:
+                        _run_rng_pin.append((_r, _s0))
                 except Exception:  # noqa: BLE001 - a managed PRNG without usable state; skip
                     pass
             if _run_rng:
@@ -1345,6 +1392,8 @@ def _native_engine_given(
                     _krsh.add(hash(_seed0_state()))
                 except Exception:  # noqa: BLE001 - best-effort reseed-detection parity
                     pass
+            # Build the per-run BuildContext once; `runner` reuses it for every example.
+            _bc[0] = _make_build_context(fn)
             try:
                 try:
                     result = _engine.run_native(
