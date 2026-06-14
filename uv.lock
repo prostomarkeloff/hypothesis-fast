@@ -54,7 +54,7 @@ provides-extras = ["fallback"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "hypothesis", specifier = ">=6" },
+    { name = "hypothesis", specifier = "==6.152.9" },
     { name = "maturin", specifier = ">=1.0,<2.0" },
     { name = "numpy", specifier = ">=2" },
     { name = "pyright", specifier = ">=1.1.409" },

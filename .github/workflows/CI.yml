@@ -57,6 +57,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
       - run: uv run maturin develop --release
+      # Parity tests aren't vendored — fetch them at the pinned tests/hypothesis_compat/UPSTREAM_REF.
+      - name: Fetch upstream parity tests (pinned ref)
+        run: bash tests/hypothesis_compat/fetch_upstream_tests.sh
       # Single-process pytest-fast (`--runs 1`) — no resident daemon to outlive the job; full
       # collection (numpy extra via the dev group). `--dump` writes the per-test outcome map, which
       # the comparator diffs against this config's baseline: any drop / addition / regression /

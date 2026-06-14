@@ -14,3 +14,7 @@ build/
 .claude/
 # local-only real-world validation corpus (never published)
 tests_materials/
+# Upstream Hypothesis parity tests — NOT vendored; fetched at tests/hypothesis_compat/UPSTREAM_REF
+# by fetch_upstream_tests.sh (`make fetch-tests`). Our harness (conftest/_compat_*/baselines) is tracked.
+tests/hypothesis_compat/test_*.py
+tests/hypothesis_compat/extra_numpy/test_*.py
